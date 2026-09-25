@@ -202,7 +202,9 @@ See [docs/INSTRUMENTATION.md](docs/INSTRUMENTATION.md).
 ## Validation status
 
 See [docs/VALIDATION.md](docs/VALIDATION.md). The tests use synthetic fixtures
-only. As of 0.1.0 the Windows Excel integration run has **not** been done.
+only. As of 0.1.1 a synthetic smoke run has passed on Windows 11 with
+Excel 16 (64-bit). The full Windows integration checklist is not done, and no
+real-workbook timings exist yet.
 
 ## License
 

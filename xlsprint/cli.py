@@ -128,6 +128,7 @@ def _cmd_profile(args: argparse.Namespace) -> int:
         names=args.names,
         keep_copy=args.keep_copy,
         label=args.label,
+        semantics=Path(args.semantics).resolve() if args.semantics else None,
         max_events=args.max_events,
         timeout_s=args.timeout,
         enable_events=args.enable_events,
@@ -163,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--names", choices=["hashed", "clear"], default="hashed", help="identifier redaction (default hashed)")
     p.add_argument("--keep-copy", action="store_true", help="keep the disposable workbook copy")
     p.add_argument("--label", help="run label shown in the report")
+    p.add_argument("--semantics", help="JSON xlsprint.semantics/1 map for human-readable region labels and intent")
     p.add_argument("--max-events", type=int, default=100_000)
     p.add_argument("--timeout", type=float, default=900.0, metavar="SECONDS",
                    help="deadline per pass and per Excel stage; Excel is terminated when it expires (default 900)")

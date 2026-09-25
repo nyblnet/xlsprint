@@ -102,6 +102,7 @@ class ProfileOptions:
     enable_events: bool = False  # Application.EnableEvents in the profiled instance
     salt: Optional[str] = None  # redaction salt; random per run when None; never written out
     argv: Optional[List[str]] = None  # recorded in run.json, paths reduced, identifiers redacted
+    semantics: Optional[Path] = None  # optional human-authored xlsprint.semantics/1 sidecar
 
 
 # --------------------------------------------------------------------------
@@ -1046,6 +1047,15 @@ def profile(opts: ProfileOptions) -> dict:
                 formulas_obj, plan_raw = formulas.inspect_workbook_and_plan(copy_path, names=opts.names, salt=salt)
             except Exception as exc:
                 raise RunnerError(f"static inspection of the copy failed: {_com_err(exc)}") from exc
+            if opts.semantics is not None:
+                from xlsprint import semantics
+                try:
+                    manifest = semantics.load_manifest(opts.semantics)
+                    formulas_obj["semantics"] = semantics.bind_manifest(
+                        manifest, workbook_sha256=orig_sha, formulas=formulas_obj,
+                        plan=plan_raw, names=opts.names, salt=salt)
+                except (OSError, ValueError) as exc:
+                    raise RunnerError(f"semantic map could not be bound: {_com_err(exc)}") from exc
             plan_info = adapt_plan_info(plan_raw)
             secret_idents += [s["sheet"] for s in plan_info["sheets"]] + [n["name"] for n in plan_info["names"]]
             plan = build_plan(plan_info, opts)

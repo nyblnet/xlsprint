@@ -485,7 +485,7 @@ def phase_breakdown(run: Run) -> List[dict]:
 def hotspots(run: Run, top: int = 25) -> List[dict]:
     """Rank (kind, name) by median self time across passes.
 
-    Each row: {kind, name, sheet, median_ns, median_self_ns, n, min_ns,
+    Each row: {kind, name, sheet, address, median_ns, median_self_ns, n, min_ns,
     max_ns, measurement}. ``median_ns`` summarizes DIRECT durations.
     ``measurement`` is "measured" when no sample had children (self time is
     then the direct duration) and "derived" when self time subtracts a child
@@ -503,6 +503,8 @@ def hotspots(run: Run, top: int = 25) -> List[dict]:
             "kind": kind,
             "name": name,
             "sheet": _sheet_of(spans[0]) if kind in SHEET_CHILD_KINDS + ("calc.sheet",) else None,
+            "address": spans[0].attrs.get("address") if isinstance(spans[0].attrs.get("address"), str)
+            else (name if kind == "calc.range" and "!" in name else None),
             "median_ns": durs["median"],
             "median_self_ns": selfs["median"],
             "n": durs["n"],

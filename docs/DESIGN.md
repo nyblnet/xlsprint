@@ -199,6 +199,22 @@ and Range.Calculate may thread differently. The report therefore:
 a ranking aid: sheet calculations are separate calls, and their times are not
 additive parts of the workbook recalc time.
 
+## Human-authored semantics
+
+An optional `xlsprint.semantics/1` JSON sidecar labels workbook regions and
+VBA procedure spans with owner-supplied business intent. The profile checks
+its optional full workbook SHA-256, resolves clear selectors while the
+workbook plan is in memory, then stores only the same redacted identifiers as
+the trace plus the supplied label, category, intent and source in
+`formulas.json`. Raw formulas and values are not used for annotation matching.
+The report shows semantic descriptions before technical identifiers and cell
+addresses, and marks selectors with no observed timing explicitly. Inferred
+intent is outside this contract and must be labelled as a suggestion with its
+own confidence and provenance if introduced later.
+
+The map annotates measured regions; it does not split a range's elapsed time
+among formulas or change the meaning of `Range.Calculate` measurements.
+
 ## Double-counting rule
 
 A total over a set of spans is the length of the **union of their intervals**

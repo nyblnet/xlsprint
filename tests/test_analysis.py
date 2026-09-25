@@ -199,6 +199,7 @@ def test_drilldown_and_hotspots(tmp_path):
     all_hs = hotspots(run)
     names = {(h["kind"], h["name"]) for h in all_hs}
     assert ("calc.range", "Model!A1:B10") in names and ("calc.name", "Block") in names
+    assert next(h for h in all_hs if h["kind"] == "calc.range")["address"] == "Model!A1:B10"
     assert [h for h in all_hs if h["kind"] == "calc.group"][0]["note"].startswith("measured (isolated")
     assert not any(h["kind"] in ("run.pass", "host.stage") for h in all_hs)
 

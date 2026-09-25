@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xlsprint"
-version = "0.1.1"
+version = "0.1.2"
 description = "Open-source Excel calculation profiler built on Microsoft's MicroTimer drill-down guidance"
 readme = "README.md"
 license = {text = "MIT"}

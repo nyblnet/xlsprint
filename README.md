@@ -92,6 +92,19 @@ xlsprint report out/trace-on.jsonl --trace-off out/trace-off.jsonl --formulas ou
 xlsprint validate out/trace-on.jsonl out/trace-off.jsonl
 ```
 
+To add human-readable business labels and intent, pass an optional JSON
+`xlsprint.semantics/1` sidecar. The profile checks its workbook SHA-256,
+resolves readable selectors in memory, and shows the supplied meaning beside
+measured regions while preserving cell references as technical locators:
+
+```sh
+xlsprint profile Book.xlsm --out D:\xlsprint-out\book --semantics Book-meaning.json
+```
+
+See [`docs/SEMANTICS.md`](docs/SEMANTICS.md) for the sidecar contract and
+privacy behavior. XLSprint displays owner-supplied intent; it does not claim to
+infer financial meaning from formula text.
+
 ### What `profile` does
 
 1. **prepare_copy.** Hashes the original (sha256) and copies it into
@@ -142,8 +155,8 @@ run fails, instead of hanging.
 | File | Format |
 |---|---|
 | `trace-on.jsonl`, `trace-off.jsonl` | JSON Lines: a header, balanced `B`/`E` events and `M` markers, then a footer. Events carry `id`, `parent`, `pass`, `depth`, `ns`, `clock`, `kind`, `name`, and allow-listed `attrs`. Schema: [docs/DESIGN.md](docs/DESIGN.md). |
-| `formulas.json` | Structural diagnostics: groups by fingerprint, counts, feature flags, areas, defined names that refer to ranges, and detection limitations. |
-| `report.html` | A standalone page (inline CSS, JS, and SVG, with no network access). It contains the route diagram, timeline, drill-down, hotspots, phase breakdown, overhead, formula diagnostics, and measurement limits. |
+| `formulas.json` | Structural diagnostics: groups by fingerprint, counts, feature flags, areas, defined names and (when supplied) semantic annotations. |
+| `report.html` | A standalone page (inline CSS, JS, and SVG, with no network access). It contains the route diagram, timeline, drill-down, hotspots, phase breakdown, overhead, model meaning, formula diagnostics, and measurement limits. |
 | `run.json` | Arguments (paths reduced to basenames), versions, Excel version/build/bitness/threads, clock-probe results, and validation results. |
 
 Traces are bounded (`--max-events`, default 100 000 on the VBA side and

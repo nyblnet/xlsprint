@@ -869,6 +869,7 @@ class _Name:
 
 @dataclass
 class _Scan:
+    sha256: str
     sha_prefix: str
     sheets: List[_Sheet]
     groups: List[_Group]
@@ -1122,7 +1123,7 @@ def _scan(path) -> _Scan:
 
     ordered = sorted(groups.values(), key=lambda g: (g.sheet_index, g.first, g.norm))
     _count_name_cells(sheets, ordered, names)
-    return _Scan(sha_prefix=sha[:10], sheets=sheets, groups=ordered, names=names)
+    return _Scan(sha256=sha, sha_prefix=sha[:10], sheets=sheets, groups=ordered, names=names)
 
 
 def _count_name_cells(sheets: List[_Sheet], groups: List[_Group], names: List[_Name]) -> None:
@@ -1244,6 +1245,7 @@ def _build_output(scan: _Scan, namer: _Namer, rects: Dict[int, List[Rect]],
 
     return {
         "schema": SCHEMA,
+        "workbook_sha256": scan.sha256,
         "workbook_sha256_prefix": scan.sha_prefix,
         "redaction": {"names": namer.mode},
         "sheets": sheet_out,
@@ -1302,6 +1304,7 @@ def _build_plan(scan: _Scan, rects: Dict[int, List[Rect]], fps: List[str],
     plan = {
         "schema": PLAN_SCHEMA,
         "in_memory_only": True,
+        "workbook_sha256": scan.sha256,
         "workbook_sha256_prefix": scan.sha_prefix,
         "sheets": plan_sheets,
         "names": plan_names,

@@ -202,6 +202,9 @@ def _formulas_model(formulas: dict | None) -> dict | None:
     def addr(v: Any) -> Any:
         return v if isinstance(v, str) and _SAFE_ADDR_RE.match(v) else None
 
+    def structural(v: Any) -> Any:
+        return v if isinstance(v, str) and len(v) <= 256 and "=" not in v and '"' not in v else None
+
     groups_in = [g for g in (formulas.get("groups") or []) if isinstance(g, dict)]
     groups_in.sort(key=lambda g: (-(g.get("cells") or 0), str(g.get("group", ""))))
     groups = []
@@ -228,6 +231,7 @@ def _formulas_model(formulas: dict | None) -> dict | None:
             "external_ref": bool(g.get("external_ref")),
             "whole_column_ref": bool(g.get("whole_column_ref")),
             "whole_row_ref": bool(g.get("whole_row_ref")),
+            "annotations": [],
         })
     sheets = [{"sheet": s.get("sheet") if isinstance(s.get("sheet"), str) else None,
                "formula_cells": s.get("formula_cells"), "used_range": addr(s.get("used_range")),
@@ -239,17 +243,161 @@ def _formulas_model(formulas: dict | None) -> dict | None:
     limitations = [x for x in (formulas.get("limitations") or [])
                    if isinstance(x, str) and len(x) <= 400 and "=" not in x and '"' not in x][:30]
     redaction = formulas.get("redaction") if isinstance(formulas.get("redaction"), dict) else {}
+    names = []
+    for item in (formulas.get("names") or []):
+        if not isinstance(item, dict):
+            continue
+        names.append({
+            "name": structural(item.get("name")),
+            "scope": structural(item.get("scope")),
+            "sheet": structural(item.get("sheet")),
+            "refers_to_range": addr(item.get("refers_to_range")),
+            "is_range": bool(item.get("is_range")),
+            "hidden": bool(item.get("hidden")),
+            "formula_cells": item.get("formula_cells"),
+            "annotations": [],
+        })
+    semantics_in = formulas.get("semantics") if isinstance(formulas.get("semantics"), dict) else {}
+    semantic_annotations = []
+    for item in (semantics_in.get("annotations") or [])[:500]:
+        if not isinstance(item, dict):
+            continue
+        annotation = {
+            key: value for key, limit in (("id", 80), ("label", 120), ("intent", 600),
+                                          ("category", 80), ("source", 120))
+            if isinstance((value := item.get(key)), str) and len(value) <= limit
+        }
+        if not all(isinstance(annotation.get(key), str) for key in ("id", "label", "intent")):
+            continue
+        binding = item.get("binding") if item.get("binding") in ("bound", "unmatched") else "unmatched"
+        targets = []
+        for target in (item.get("targets") or [])[:100]:
+            if not isinstance(target, dict):
+                continue
+            clean = {key: structural(target.get(key)) for key in
+                     ("target", "kind", "name", "scope", "sheet", "address", "span_kind", "group")
+                     if target.get(key) is not None}
+            if isinstance(target.get("span_kinds"), list):
+                clean["span_kinds"] = [v for v in target["span_kinds"] if isinstance(v, str) and len(v) <= 40][:10]
+            if clean:
+                targets.append(clean)
+        semantic_annotations.append({**annotation, "binding": binding, "targets": targets,
+                                     "timed_match_count": 0})
     return {
         "schema": formulas.get("schema") if isinstance(formulas.get("schema"), str) else None,
         "workbook_sha256_prefix": addr(formulas.get("workbook_sha256_prefix")),
         "sheets": sheets,
         "groups": groups,
+        "names": names[:1000],
         "groups_total": len(groups_in),
         "names_count": len(formulas.get("names") or []),
         "totals": totals,
         "limitations": limitations,
         "redaction_names": redaction.get("names") if isinstance(redaction.get("names"), str) else None,
+        "semantics": {"schema": "xlsprint.semantics/1",
+                      "workbook_bound": bool(semantics_in.get("workbook_bound")),
+                      "annotations": semantic_annotations,
+                      "unbound_count": int(semantics_in.get("unbound_count") or 0)},
     }
+
+
+def _same_address(left: Any, right: Any) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    clean = lambda value: re.sub(r"[\s$]", "", value).upper()
+    return clean(left.rsplit("!", 1)[-1]) == clean(right.rsplit("!", 1)[-1])
+
+
+def _target_matches(row: dict, target: dict, *, sheet: str | None = None,
+                    formula_group: bool = False, defined_name: bool = False) -> bool:
+    target_type = target.get("target")
+    if target_type == "defined_name":
+        if defined_name:
+            return (row.get("name") == target.get("name")
+                    and (target.get("scope") is None or row.get("scope") == target.get("scope")))
+        return (row.get("kind") == target.get("span_kind") == "calc.name"
+                and row.get("name") == target.get("name")
+                and (target.get("sheet") is None or (row.get("sheet") or sheet) == target.get("sheet"))
+                and (target.get("address") is None or _same_address(row.get("address"), target.get("address"))))
+    if target_type == "formula_group":
+        if formula_group:
+            return row.get("group") == target.get("group") \
+                and (target.get("sheet") is None or row.get("sheet") == target.get("sheet"))
+        return (row.get("kind") == target.get("span_kind") == "calc.group"
+                and row.get("name") == target.get("group")
+                and (target.get("sheet") is None or (row.get("sheet") or sheet) == target.get("sheet")))
+    kinds = target.get("span_kinds") or ([target.get("span_kind")] if target.get("span_kind") else [])
+    kind = target.get("kind") or target.get("span_kind")
+    if target_type == "span" and kind and row.get("kind") != kind:
+        return False
+    if kinds and row.get("kind") not in kinds:
+        return False
+    if target_type == "range" or (target_type == "span" and target.get("address")):
+        row_sheet = row.get("sheet") if row.get("sheet") is not None else sheet
+        if target.get("sheet") is not None and row_sheet != target.get("sheet"):
+            return False
+        if not _same_address(row.get("address"), target.get("address")):
+            return False
+    if target.get("name") is not None and row.get("name") != target.get("name"):
+        return False
+    if target.get("sheet") is not None and target_type == "span" and "address" not in target:
+        row_sheet = row.get("sheet") if row.get("sheet") is not None else sheet
+        if row_sheet != target.get("sheet"):
+            return False
+    return bool(kinds or target_type == "span")
+
+
+def _apply_semantics(model: dict) -> None:
+    """Attach labels to matching report rows without changing any measurements."""
+    formulas = model.get("formulas") or {}
+    semantics = formulas.get("semantics") or {}
+    annotations = semantics.get("annotations") or []
+    if not annotations:
+        return
+    timed_matches: dict[str, set[str]] = {a["id"]: set() for a in annotations}
+
+    def add(row: dict, *, sheet: str | None = None, formula_group: bool = False,
+            defined_name: bool = False, timed: bool = False, row_key: str = "") -> None:
+        if not isinstance(row, dict):
+            return
+        for annotation in annotations:
+            for target in annotation.get("targets") or []:
+                if _target_matches(row, target, sheet=sheet, formula_group=formula_group,
+                                   defined_name=defined_name):
+                    row.setdefault("annotations", []).append({key: annotation[key] for key in
+                                      ("id", "label", "intent", "category", "source") if key in annotation})
+                    if timed:
+                        timed_matches[annotation["id"]].add(row_key)
+                    break
+
+    for row in formulas.get("names") or []:
+        add(row, defined_name=True)
+    for row in formulas.get("groups") or []:
+        add(row, formula_group=True)
+        for annotation in annotations:
+            if any(target.get("target") == "range" and target.get("sheet") == row.get("sheet")
+                   and any(_same_address(area, target.get("address")) for area in (row.get("areas") or []))
+                   for target in annotation.get("targets") or []):
+                row.setdefault("annotations", []).append({key: annotation[key] for key in
+                                  ("id", "label", "intent", "category", "source") if key in annotation})
+    for sheet_row in (model.get("drilldown") or {}).get("sheets") or []:
+        for row in sheet_row.get("children") or []:
+            add(row, sheet=sheet_row.get("name"), timed=True,
+                row_key=f"drilldown:{sheet_row.get('name')}:{row.get('kind')}:{row.get('name')}:{row.get('address')}")
+    for row in model.get("hotspots") or []:
+        add(row, timed=True, row_key=f"hotspot:{row.get('kind')}:{row.get('sheet')}:{row.get('name')}")
+    for row in (model.get("timeline") or {}).get("rows") or []:
+        add(row, timed=True, row_key=f"timeline:{row.get('id')}")
+
+    def add_proc(rows: list, prefix: str = "") -> None:
+        for index, row in enumerate(rows):
+            key = f"{prefix}/{index}:{row.get('name')}"
+            add(row, timed=True, row_key=f"proc:{key}")
+            add_proc(row.get("children") or [], key)
+
+    add_proc(model.get("vba_procs") or [])
+    for annotation in annotations:
+        annotation["timed_match_count"] = len(timed_matches[annotation["id"]])
 
 
 def build_model(on: Any, off: Any = None, formulas: dict | None = None) -> dict:
@@ -329,7 +477,7 @@ def build_model(on: Any, off: Any = None, formulas: dict | None = None) -> dict:
         "has_off": off is not None,
     }
 
-    return _apply_caps({
+    model = _apply_caps({
         "schema": REPORT_SCHEMA,
         "tool_version": __version__,
         "meta": meta,
@@ -345,6 +493,8 @@ def build_model(on: Any, off: Any = None, formulas: dict | None = None) -> dict:
         "formulas": _formulas_model(formulas),
         "section_errors": section_errors,
     })
+    _apply_semantics(model)
+    return model
 
 
 def _apply_caps(model: dict) -> dict:
@@ -398,7 +548,12 @@ class _Map:
 
 
 _SUMMARY = {"n": S, "median": S, "min": S, "max": S, "p25": S, "p75": S}
-_PROC: dict = {"kind": S, "name": S, "summary": _SUMMARY, "self_summary": _SUMMARY}
+_ANNOTATION = {"id": S, "label": S, "intent": S, "category": S, "source": S}
+_ANNOTATIONS = [_ANNOTATION]
+_SEMANTIC_TARGET = {"target": S, "kind": S, "name": S, "scope": S, "sheet": S,
+                    "address": S, "span_kind": S, "group": S, "span_kinds": SL}
+_PROC: dict = {"kind": S, "name": S, "summary": _SUMMARY, "self_summary": _SUMMARY,
+               "annotations": _ANNOTATIONS}
 _PROC["children"] = [_PROC]
 _MODEL_SPEC = {
     "schema": S, "tool_version": S,
@@ -412,33 +567,43 @@ _MODEL_SPEC = {
     "host_stages": [{"name": S, "start_rel_ns": S, "dur_ns": S, "status": S}],
     "passes": [{"pass": S, "id": S, "status": S, "dur_ns": S, "by_kind_union_ns": _Map(S)}],
     "timeline": {"rows": [{"id": S, "kind": S, "name": S, "pass": S, "depth": S,
-                           "start_rel_ns": S, "dur_ns": S, "status": S}],
+                           "start_rel_ns": S, "dur_ns": S, "status": S,
+                           "annotations": _ANNOTATIONS}],
                  "truncated": S, "max_rows": S},
     "drilldown": {"workbook": {"full": _SUMMARY, "recalc": _SUMMARY, "fullrebuild": _SUMMARY,
                                "volatility_ratio": S},
                   "sheets": [{"name": S, "recalc": _SUMMARY, "share_of_recalc_sum": S,
                               "children": [{"kind": S, "name": S, "summary": _SUMMARY, "address": S,
-                                           "measurement": S}],
+                                           "measurement": S, "annotations": _ANNOTATIONS}],
                               "children_truncated": S}],
                   "sheets_truncated": S},
     "phases": [{"kind": S, "count": S, "passes": S, "union_ns_median_per_pass": S, "share_of_pass": S}],
     "vba_procs": [_PROC],
     "hotspots": [{"kind": S, "name": S, "sheet": S, "median_ns": S, "median_self_ns": S, "n": S,
-                  "min_ns": S, "max_ns": S, "measurement": S, "note": S}],
+                  "address": S, "min_ns": S, "max_ns": S, "measurement": S, "note": S,
+                  "annotations": _ANNOTATIONS}],
     "overhead": {"available": S, "reason": S,
                  "rows": [{"kind": S, "name": S, "median_on_ns": S, "median_off_ns": S, "diff_ns": S,
                            "diff_min_ns": S, "diff_max_ns": S, "iqr_on_ns": S, "iqr_off_ns": S,
                            "resolvable": S, "pairs": S, "reason": S, "available": S,
                            "unavailable_reason": S, "dropped_pairs": S, "dropped_passes": SL}]},
-    "formulas": {"schema": S, "workbook_sha256_prefix": S, "groups_total": S, "names_count": S,
+    "formulas": {"schema": S, "workbook_sha256_prefix": S,
+                 "groups_total": S, "names_count": S,
                  "limitations": SL, "redaction_names": S,
+                 "semantics": {"schema": S, "workbook_bound": S, "unbound_count": S,
+                               "annotations": [{"id": S, "label": S, "intent": S, "category": S,
+                                               "source": S, "binding": S, "timed_match_count": S,
+                                               "targets": [_SEMANTIC_TARGET]}]},
                  "sheets": [{"sheet": S, "formula_cells": S, "used_range": S, "data_tables": S}],
                  "groups": [{"group": S, "fingerprint": S, "sheet": S, "cells": S, "areas": SL, "areas_total": S,
                              "lambda_calls": S, "length_bucket": S, "whole_row_ref": S,
                              "functions": SL, "udfs": S, "volatile": S, "volatile_functions": SL,
                              "single_threaded": S, "single_threaded_functions": SL, "array": S,
                              "dynamic_array": S, "cross_sheet": S, "external_ref": S,
-                             "whole_column_ref": S}],
+                             "whole_column_ref": S, "annotations": _ANNOTATIONS}],
+                 "names": [{"name": S, "scope": S, "sheet": S, "refers_to_range": S,
+                            "is_range": S, "hidden": S, "formula_cells": S,
+                            "annotations": _ANNOTATIONS}],
                  "totals": {k: S for k in FORMULA_TOTALS}},
     "section_errors": _Map(S),
 }
@@ -826,6 +991,21 @@ def _summary_cells(summary: Any, cls: str = MEASURED) -> str:
             f'<td>{_range(summary, cls)}</td><td data-v="{_sv(n)}">{_num(n, STATIC, "count")}</td>')
 
 
+def _semantic_inline(row: dict) -> str:
+    annotations = [item for item in (row.get("annotations") or []) if isinstance(item, dict)]
+    if not annotations:
+        return ""
+    parts = []
+    for item in annotations[:3]:
+        category = (f'<span class="semantic-category">{_e(item.get("category"))}</span>'
+                    if item.get("category") else "")
+        parts.append(f'<div class="semantic-inline"><strong>{_e(item.get("label"))}</strong>{category}'
+                     f'<div>{_e(item.get("intent"))}</div></div>')
+    if len(annotations) > 3:
+        parts.append(f'<div class="muted">+{len(annotations) - 3} more annotations</div>')
+    return "".join(parts)
+
+
 def _drilldown(model: dict) -> str:
     dd = model.get("drilldown") or {}
     wb = dd.get("workbook") or {}
@@ -879,7 +1059,8 @@ def _drilldown(model: dict) -> str:
                 if ck != "calc.group" and isinstance(cm, str) and cm not in ("measured", ""):
                     caveat = f'<div class="caveat">{_e(cm)}</div>'
 
-                rows.append(f'<tr><td>{_kind(ck)}</td><td>{_e(c.get("name"))}{caveat}</td>'
+                rows.append(f'<tr><td>{_kind(ck)}</td><td>{_semantic_inline(c)}'
+                            f'<span class="technical-name">{_e(c.get("name"))}</span>{caveat}</td>'
                             f'<td><code>{_e(c.get("address"))}</code></td>{_summary_cells(cs)}</tr>')
             more = s.get("children_truncated")
             if _is_num(more) and more > 0:
@@ -920,7 +1101,9 @@ def _hotspots(model: dict) -> str:
         caveat = f'<div class="caveat">{_e(note)}</div>' if note else ""
         rows.append(
             f'<tr><td data-v="{i}">{i}</td><td data-v="{_sv(h.get("kind"))}">{_kind(h.get("kind"))}</td>'
-            f'<td data-v="{_sv(h.get("name"))}">{_e(h.get("name"))}{caveat}</td>'
+            f'<td data-v="{_sv(h.get("name"))}">{_semantic_inline(h)}'
+            f'<span class="technical-name">{_e(h.get("name"))}</span>'
+            f'{("<code class=technical-address>" + _e(h.get("address")) + "</code>") if h.get("address") else ""}{caveat}</td>'
             f'<td data-v="{_sv(h.get("sheet"))}">{_e(h.get("sheet") or "")}</td>'
             f'<td data-v="{_sv(h.get("median_self_ns"))}">{self_cell}</td>'
             f'<td data-v="{_sv(h.get("median_ns"))}">{_num(h.get("median_ns"), mcls)}</td>'
@@ -947,7 +1130,8 @@ def _proc_list(nodes: list) -> str:
     for n in nodes:
         s = n.get("summary")
         ss = n.get("self_summary")
-        items.append(f'<li><div class="proc">{_kind(n.get("kind"))} <strong>{_e(n.get("name"))}</strong> '
+        items.append(f'<li><div class="proc">{_kind(n.get("kind"))} {_semantic_inline(n)}'
+                     f'<strong class="technical-name">{_e(n.get("name"))}</strong> '
                      f'median {_num(_med(s), MEASURED)}, self {_num(_med(ss), DERIVED, "ns", F_SELF)}, '
                      f'min–max {_range(s)}, n {_num(s.get("n") if isinstance(s, dict) else None, STATIC, "count")}'
                      f'</div>{_proc_list(n.get("children") or [])}</li>')
@@ -1095,6 +1279,7 @@ def _formulas(model: dict) -> str:
             arr = "dynamic" if g.get("dynamic_array") else ("yes" if g.get("array") else "no")
             rows.append(
                 f'<tr><td data-v="{_sv(g.get("group"))}"><code>{_e(g.get("group"))}</code></td>'
+                f'<td>{_semantic_inline(g) or "<span class=muted>Unmapped</span>"}</td>'
                 f'<td data-v="{_sv(g.get("fingerprint"))}"><code class="fp">{_e(g.get("fingerprint"))}</code></td>'
                 f'<td data-v="{_sv(g.get("sheet"))}">{_e(g.get("sheet"))}</td>'
                 f'<td data-v="{_sv(g.get("cells"))}">{_num(g.get("cells"), STATIC, "count")}</td>'
@@ -1111,7 +1296,7 @@ def _formulas(model: dict) -> str:
         cap = (f'<p class="muted">Showing the {_num(shown, STATIC, "count")} largest of '
                f'{_num(total, STATIC, "count")} groups.</p>' if _is_num(total) and total > shown else "")
         parts.append('<h3>Formula groups</h3><div class="scroll"><table class="sortable"><thead><tr>'
-                     '<th data-sort-type="str">group</th><th data-sort-type="str">fingerprint</th>'
+                     '<th data-sort-type="str">group</th><th>meaning / intent</th><th data-sort-type="str">fingerprint</th>'
                      '<th data-sort-type="str">sheet</th><th data-sort-type="num" aria-sort="descending">cells</th>'
                      '<th data-sort-type="num">areas</th><th data-sort-type="str">functions</th>'
                      '<th data-sort-type="num">volatile</th><th data-sort-type="num">UDFs</th>'
@@ -1119,11 +1304,55 @@ def _formulas(model: dict) -> str:
                      '<th data-sort-type="num">cross-sheet</th><th data-sort-type="num">other refs</th>'
                      '<th data-sort-type="str">length</th></tr></thead>'
                      f'<tbody>{"".join(rows)}</tbody></table></div>{cap}')
+    names = fm.get("names") or []
+    if names:
+        rows = "".join(
+            f'<tr><td>{_semantic_inline(n) or "<span class=muted>Unmapped</span>"}</td>'
+            f'<td><code>{_e(n.get("name"))}</code></td><td>{_e(n.get("scope"))}</td>'
+            f'<td><code>{_e(n.get("refers_to_range"))}</code></td>'
+            f'<td>{_num(n.get("formula_cells"), STATIC, "count")}</td></tr>' for n in names[:500])
+        parts.append('<details><summary>Defined names</summary><div class="scroll"><table><thead><tr>'
+                     '<th>meaning / intent</th><th>name</th><th>scope</th><th>refers to</th>'
+                     '<th>formula cells</th></tr></thead><tbody>' + rows + '</tbody></table></div></details>')
     if fm.get("redaction_names"):
         parts.append(f'<p class="muted">Identifier redaction in formula inspection: {_e(fm.get("redaction_names"))}.</p>')
     if _is_num(fm.get("names_count")):
         parts.append(f'<p class="muted">Defined names inspected: {_num(fm.get("names_count"), STATIC, "count")}.</p>')
     return _section("formulas", "Formula diagnostics", "".join(parts))
+
+
+def _semantics(model: dict) -> str:
+    semantic_map = ((model.get("formulas") or {}).get("semantics") or {})
+    annotations = semantic_map.get("annotations") or []
+    if not annotations:
+        return _section("semantics", "Model meaning",
+                        '<p class="muted">No semantic map was supplied. Technical names and cell references remain available in the report.</p>')
+    rows = []
+    for item in annotations:
+        count = item.get("timed_match_count") or 0
+        if item.get("binding") == "unmatched":
+            observed = '<span class="flag">Target not found in this workbook</span>'
+        elif count:
+            observed = f'<span class="flag on">Matched {count} report rows</span>'
+        else:
+            observed = '<span class="flag">Mapped; no matching timed row in this run</span>'
+        category = (f'<div class="semantic-category">{_e(item.get("category"))}</div>'
+                    if item.get("category") else "")
+        rows.append(f'<tr><td><strong>{_e(item.get("label"))}</strong>{category}</td>'
+                    f'<td>{_e(item.get("intent"))}</td><td>{_e(item.get("source") or "Analyst annotation")}</td>'
+                    f'<td>{observed}</td></tr>')
+    warnings = []
+    if semantic_map.get("unbound_count"):
+        warnings.append(f'{_num(semantic_map.get("unbound_count"), STATIC, "count")} annotation(s) did not resolve to workbook structure.')
+    if not semantic_map.get("workbook_bound"):
+        warnings.append('This semantic map is not bound to a workbook SHA-256.')
+    note = '<p class="muted">Descriptions come from the supplied map. They identify the purpose of measured regions; they do not assign per-formula runtime.</p>'
+    if warnings:
+        note += '<ul class="muted">' + ''.join(f'<li>{item}</li>' for item in warnings) + '</ul>'
+    table = ('<div class="scroll"><table><thead><tr><th>semantic label</th><th>intent</th>'
+             '<th>source</th><th>trace match</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>')
+    return _section("semantics", "Model meaning", note + table,
+                    "Human-authored descriptions attached to workbook structure and timed spans.")
 
 
 def _limits(model: dict) -> str:
@@ -1267,6 +1496,11 @@ align-items:center;padding:6px 8px}
 .bar>span{display:block;height:100%;background:var(--derived);opacity:.75}
 .dd-kids{padding:4px 8px 12px 1.6rem;overflow-x:auto}
 .caveat{font-size:.8rem;color:var(--muted);margin-top:2px}.caveat-inline{font-size:.8rem;color:var(--muted)}
+.semantic-inline{margin:2px 0 5px;padding:5px 7px;border-left:3px solid var(--accent);background:var(--panel-2);border-radius:3px;overflow-wrap:anywhere}
+.semantic-inline>div{font-size:.82rem;color:var(--muted);font-weight:400;margin-top:2px}
+.semantic-category{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:9px;background:var(--panel-2);color:var(--muted);font-size:.72rem;font-weight:600}
+.technical-name{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;color:var(--muted);overflow-wrap:anywhere}
+.technical-address{display:block;margin-top:2px;color:var(--muted);font-size:.76rem;overflow-wrap:anywhere}
 .note{background:var(--panel-2);border-left:3px solid var(--derived);padding:8px 12px;border-radius:4px}
 .tree{list-style:none;padding-left:1.1rem;margin:.2rem 0}.tree .tree{border-left:1px solid var(--line)}
 .proc{padding:3px 0;font-size:.9rem}
@@ -1337,7 +1571,7 @@ def render_html(model: dict) -> str:
         sections.append('<section id="timing-withheld"><h2>Timing withheld</h2><p>The trace failed '
                         'validation, so no timing sections are shown. Fix the trace, or re-render with '
                         '<code>--allow-invalid</code> to inspect it anyway.</p></section>')
-    sections += [_formulas(model), _limits(model)]
+    sections += [_semantics(model), _formulas(model), _limits(model)]
     return (
         "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"

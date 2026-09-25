@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xlsprint"
+version = "0.1.0"
+description = "Open-source Excel calculation profiler built on Microsoft's MicroTimer drill-down guidance"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = ["openpyxl>=3.1"]
+
+[project.urls]
+Homepage = "https://github.com/nyblnet/xlsprint"
+Issues = "https://github.com/nyblnet/xlsprint/issues"
+
+[project.optional-dependencies]
+windows = ["pywin32>=306; sys_platform == 'win32'"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+xlsprint = "xlsprint.cli:main"
+
+[tool.setuptools]
+packages = ["xlsprint"]
+
+[tool.setuptools.package-data]
+xlsprint = ["vba/*.bas"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

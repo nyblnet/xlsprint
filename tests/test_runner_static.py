@@ -714,6 +714,49 @@ def test_bas_no_case_insensitive_name_clashes():
     assert not ({p.lower() for p in procs} & {c.lower() for c in consts})
 
 
+def test_bas_local_names_do_not_shadow_attribute_builders():
+    code = "\n".join(_bas_lines())
+    builders = {
+        name.lower()
+        for name in re.findall(r"^(?:Public |Private )?Function (Attr[SNB])\b", code, re.M)
+    }
+    for proc, body in _procs().items():
+        for line in body:
+            if not re.match(r"^Dim\s+", line, re.I):
+                continue
+            declarations = re.sub(r"^Dim\s+", "", line, flags=re.I)
+            local_names = re.findall(
+                r"(?:^|,)\s*([A-Za-z_]\w*)(?:\s*\([^)]*\))?\s+As\b",
+                declarations,
+                re.I,
+            )
+            conflicts = builders & {name.lower() for name in local_names}
+            assert not conflicts, f"{proc}: local declaration shadows {sorted(conflicts)}"
+
+
+@pytest.mark.parametrize("hresult", [-2147418111, 0x80010001, -2147417846, 0x8001010A])
+def test_excel_busy_com_hresult_is_retryable(hresult):
+    exc = Exception("Excel is busy")
+    exc.hresult = hresult
+    assert runner._is_excel_busy_rejection(exc)
+
+
+@pytest.mark.parametrize("hresult", [None, 0, -2147467259, "not-an-hresult"])
+def test_non_busy_com_hresult_is_not_retryable(hresult):
+    exc = Exception("not an Excel busy rejection")
+    if hresult is not None:
+        exc.hresult = hresult
+    assert not runner._is_excel_busy_rejection(exc)
+
+
+def test_runner_retries_only_excel_busy_com_rejections():
+    src = Path(runner.__file__).read_text(encoding="utf-8")
+    body = src.split("    def run_vba(proc: str, *args):", 1)[1].split("    def probe_clock", 1)[0]
+    assert "_MAX_EXCEL_BUSY_RETRIES" in body
+    assert "_is_excel_busy_rejection(exc)" in body
+    assert "pythoncom.PumpWaitingMessages()" in body
+
+
 def test_bas_public_api_used_by_runner():
     code = "\n".join(_bas_lines())
     src = Path(runner.__file__).read_text(encoding="utf-8")
@@ -750,7 +793,7 @@ def test_bas_has_no_per_cell_array_scan():
     for word in ("CurrentArray", "HasArray", "SpecialCells", "For Each c"):
         assert word not in code, word
     body = _procs()["StepRange"]
-    assert "rng.Calculate" in body and "sid = SpanBegin(kind, key, attrs)" in body
+    assert "rng.Calculate" in body and "sid = SpanBegin(kind, key, spanAttributes)" in body
 
 
 def test_bas_attr_allow_list_matches_trace():

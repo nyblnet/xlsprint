@@ -22,16 +22,25 @@ timing that appears in the test suite or in `xlsprint selftest` output is
 `xlsprint selftest --out DIR` runs the offline pipeline end to end on
 synthetic data and labels the output SYNTHETIC.
 
-## 2. Windows Excel integration (NOT yet done)
+## 2. Windows Excel integration (partial)
 
-The VBA module and the COM runner have **not** run against Excel Desktop. They
-were written and reviewed on macOS, where the method cannot run. No
-real-workbook timing exists yet.
+### Recorded synthetic Windows smoke
 
-### Checklist for the first Windows run
+On 2026-09-25, the VBA module and COM runner completed trace-off and trace-on
+passes against a generated synthetic workbook in desktop Excel. The VM ran
+Windows 11 ARM64 with Excel 16.0 build 20326.0, 64-bit, and eight calculation
+threads. Both traces validated, the report was written, there were no run
+warnings, and the dedicated Excel process closed successfully. This exercises
+the basic COM/VBA instrumentation path on a synthetic fixture; it does not
+complete the integration checklist below or establish real-workbook results.
 
-Use a disposable, non-confidential workbook first. The synthetic one works:
-`xlsprint selftest` writes `synthetic-workbook.xlsx`.
+No real workbook, formula inventory, traces, report, or timings are included
+in this repository.
+
+### Remaining Windows integration checklist
+
+Use a synthetic or disposable non-confidential workbook for the remaining
+cases. `xlsprint selftest` writes `synthetic-workbook.xlsx`.
 
 1. Install with `pip install -e .[windows]`, and turn on *Trust access to the
    VBA project object model*.

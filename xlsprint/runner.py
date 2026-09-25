@@ -884,6 +884,25 @@ def _qual(wb_name: str, proc: str) -> str:
     return "'%s'!%s.%s" % (wb_name.replace("'", "''"), VBA_MODULE, proc)
 
 
+_RETRYABLE_EXCEL_BUSY_HRESULTS = frozenset({0x80010001, 0x8001010A})
+_MAX_EXCEL_BUSY_RETRIES = 120
+_EXCEL_BUSY_RETRY_MAX_DELAY_S = 0.25
+
+
+def _is_excel_busy_rejection(exc: BaseException) -> bool:
+    """Return whether COM reports Excel temporarily rejecting an automation call."""
+
+    hresult = getattr(exc, "hresult", None)
+    if hresult is None:
+        args = getattr(exc, "args", ())
+        hresult = args[0] if args else None
+    try:
+        code = int(hresult) & 0xFFFFFFFF
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return code in _RETRYABLE_EXCEL_BUSY_HRESULTS
+
+
 def _com_err(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
@@ -961,7 +980,17 @@ def profile(opts: ProfileOptions) -> dict:
     meta: Dict[str, dict] = {}
 
     def run_vba(proc: str, *args):
-        return xl.Run(_qual(wb.Name, proc), *args)
+        qualified = _qual(wb.Name, proc)
+        for attempt in range(_MAX_EXCEL_BUSY_RETRIES + 1):
+            try:
+                return xl.Run(qualified, *args)
+            except Exception as exc:
+                if not _is_excel_busy_rejection(exc) or attempt >= _MAX_EXCEL_BUSY_RETRIES:
+                    raise
+                with contextlib.suppress(Exception):
+                    pythoncom.PumpWaitingMessages()
+                delay = min(0.05 * (attempt + 1), _EXCEL_BUSY_RETRY_MAX_DELAY_S)
+                time.sleep(delay)
 
     def probe_clock(into: list) -> None:
         for _ in range(CLOCK_PROBES):

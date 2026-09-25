@@ -549,7 +549,7 @@ End Function
 ' Returns "ok", "aborted:<n>", or "<status>;flush:<error>".
 Public Function XSP_RunPass(ByVal passId As Long, ByVal mode As String, ByVal planPath As String) As String
     Dim steps() As String, i As Long, passSpan As Long, began As Boolean, passEnded As Boolean
-    Dim oldScreen As Boolean, oldIter As Boolean, attrs As String, abortCode As Long
+    Dim oldScreen As Boolean, oldIter As Boolean, spanAttributes As String, abortCode As Long
     Dim status As String, flushResult As String, plan As String
 
     If Not m_active Then XSP_RunPass = "aborted:not_initialized": Exit Function
@@ -568,12 +568,12 @@ Public Function XSP_RunPass(ByVal passId As Long, ByVal mode As String, ByVal pl
     Application.ScreenUpdating = False
     If Application.Calculation <> XL_CALC_MANUAL Then Application.Calculation = XL_CALC_MANUAL
 
-    attrs = AttrS("", "overhead_mode", mode)
-    attrs = AttrS(attrs, "calc_mode", "manual")
-    attrs = AttrB(attrs, "iteration", oldIter)
-    attrs = AttrB(attrs, "multithreaded", Application.MultiThreadedCalculation.Enabled)
-    attrs = AttrN(attrs, "threads", Application.MultiThreadedCalculation.ThreadCount)
-    passSpan = SpanBegin("run.pass", "pass", attrs)
+    spanAttributes = AttrS("", "overhead_mode", mode)
+    spanAttributes = AttrS(spanAttributes, "calc_mode", "manual")
+    spanAttributes = AttrB(spanAttributes, "iteration", oldIter)
+    spanAttributes = AttrB(spanAttributes, "multithreaded", Application.MultiThreadedCalculation.Enabled)
+    spanAttributes = AttrN(spanAttributes, "threads", Application.MultiThreadedCalculation.ThreadCount)
+    passSpan = SpanBegin("run.pass", "pass", spanAttributes)
     began = True
 
     If Len(plan) > 0 Then
@@ -704,11 +704,11 @@ Failed:
 End Function
 
 Private Function StepSheet(ByVal sheetName As String) As Long
-    Dim ws As Worksheet, sid As Long, began As Boolean, code As Long, attrs As String
+    Dim ws As Worksheet, sid As Long, began As Boolean, code As Long, spanAttributes As String
     On Error GoTo Fail
-    attrs = AttrS("", "method", "Worksheet.Calculate")
+    spanAttributes = AttrS("", "method", "Worksheet.Calculate")
     Set ws = ThisWorkbook.Worksheets(sheetName)
-    sid = SpanBegin("calc.sheet", sheetName, attrs)
+    sid = SpanBegin("calc.sheet", sheetName, spanAttributes)
     began = True
     ws.Calculate
     SpanEnd sid, ST_OK, ""
@@ -718,7 +718,7 @@ Fail:
     Resume Failed
 Failed:
     On Error Resume Next
-    If Not began Then sid = SpanBegin("calc.sheet", sheetName, attrs)
+    If Not began Then sid = SpanBegin("calc.sheet", sheetName, spanAttributes)
     SpanEnd sid, ST_ERROR, AttrN("", "error_code", code)
     StepSheet = NonZero(code)
 End Function
@@ -734,26 +734,26 @@ End Function
 Private Function StepRange(ByVal kind As String, ByVal sheetName As String, _
         ByVal addrList As String, ByVal key As String) As Long
     Dim ws As Worksheet, rng As Range, sid As Long, began As Boolean, code As Long
-    Dim attrs As String, addr As String, oldIter As Boolean, iterChanged As Boolean
+    Dim spanAttributes As String, addr As String, oldIter As Boolean, iterChanged As Boolean
     On Error GoTo Fail
-    attrs = AttrS("", "method", "Range.Calculate")
+    spanAttributes = AttrS("", "method", "Range.Calculate")
 
     Set ws = ThisWorkbook.Worksheets(sheetName)
     Set rng = BuildRange(ws, addrList)
 
     addr = rng.Address
-    If Len(addr) <= XSP_MAX_ATTR_LEN Then attrs = AttrS(attrs, "address", addr)
-    attrs = AttrN(attrs, "cells", rng.CountLarge)
-    attrs = AttrN(attrs, "areas", rng.Areas.Count)
+    If Len(addr) <= XSP_MAX_ATTR_LEN Then spanAttributes = AttrS(spanAttributes, "address", addr)
+    spanAttributes = AttrN(spanAttributes, "cells", rng.CountLarge)
+    spanAttributes = AttrN(spanAttributes, "areas", rng.Areas.Count)
 
     oldIter = Application.Iteration
-    attrs = AttrB(attrs, "iteration", oldIter)
+    spanAttributes = AttrB(spanAttributes, "iteration", oldIter)
     If oldIter Then
         Application.Iteration = False
         iterChanged = True
     End If
 
-    sid = SpanBegin(kind, key, attrs)
+    sid = SpanBegin(kind, key, spanAttributes)
     began = True
     rng.Calculate
     SpanEnd sid, ST_OK, ""
@@ -764,7 +764,7 @@ Fail:
     Resume Failed
 Failed:
     On Error Resume Next
-    If Not began Then sid = SpanBegin(kind, key, attrs)
+    If Not began Then sid = SpanBegin(kind, key, spanAttributes)
     SpanEnd sid, ST_ERROR, AttrN("", "error_code", code)
     If iterChanged Then Application.Iteration = oldIter
     StepRange = NonZero(code)
